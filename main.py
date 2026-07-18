@@ -112,37 +112,34 @@ async def chat(req: ChatRequest):
     decision = response.choices[0].message.content.strip()
 
     tool_names = ["calculate", "save_note", "read_notes", "get_time", "search_web"]
-    is_tool_call = decision.strip().startswith("USE_TOOL") or any(
-        f"{t}(" in decision or f"| {t}" in decision for t in tool_names
-    )
+    is_tool_call = "USE_TOOL" in decision or any(t in decision for t in tool_names)
 
     if is_tool_call:
-        tool_name = None
-        for t in tool_names:
-            if t in decision:
-                tool_name = t
-                break
+     tool_name = None
+    for t in tool_names:
+        if t in decision:
+            tool_name = t
+            break
 
-        tool_input = ""
-        if "|" in decision:
-            tool_input = decision.split("|", 1)[1].strip()
-        elif "(" in decision and ")" in decision:
-            tool_input = decision.split("(", 1)[1].rsplit(")", 1)[0].strip()
-            tool_input = tool_input.replace('expression=', '').replace(
-                'text=', '').replace('query=', '').strip('"').strip("'")
+    tool_input = ""
+    if "|" in decision:
+        tool_input = decision.split("|", 1)[1].strip()
+    elif "(" in decision and ")" in decision:
+        tool_input = decision.split("(", 1)[1].rsplit(")", 1)[0].strip()
+        tool_input = tool_input.replace('expression=', '').replace(
+            'text=', '').replace('query=', '').strip('"').strip("'")
 
-        if tool_name and tool_name in TOOLS:
-            tool_result = TOOLS[tool_name](tool_input) if tool_input else TOOLS[tool_name]()
+    if tool_name and tool_name in TOOLS:
+        tool_result = TOOLS[tool_name](tool_input) if tool_input else TOOLS[tool_name]()
+        history.append({"role": "assistant", "content": decision})
+        history.append({"role": "user", "content": f"Tool result: {tool_result}. Now respond naturally as Waguri-san without mentioning USE_TOOL."})
 
-            history.append({"role": "assistant", "content": decision})
-            history.append({"role": "user", "content": f"Tool result: {tool_result}"})
-
-            final = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=history
-            )
-            answer = final.choices[0].message.content.strip()
-            return {"reply": answer}
+        final = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=history
+        )
+        answer = final.choices[0].message.content.strip()
+        return {"reply": answer}
 
     return {"reply": decision}
 
