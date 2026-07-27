@@ -5,3 +5,7 @@ groq
 tavily-python
 elevenlabs
 pydantic
+pypdf
+chromadb
+sentence-transformers
+python-multipart

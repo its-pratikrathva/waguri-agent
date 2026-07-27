@@ -10,6 +10,11 @@ from groq import Groq
 from tavily import TavilyClient
 from elevenlabs.client import ElevenLabs
 import base64
+from pypdf import PdfReader
+import chromadb
+from sentence_transformers import SentenceTransformer
+import io
+from fastapi import UploadFile, File
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -26,6 +31,11 @@ app.add_middleware(
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 el_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+
+# ── RAG SETUP ────────────────────────────────────────────
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+chroma_client = chromadb.Client()
+rag_collection = None
 
 # ── TOOLS ────────────────────────────────────────────────
 def calculate(expression: str) -> str:
@@ -99,10 +109,60 @@ class ChatRequest(BaseModel):
 class VoiceRequest(BaseModel):
     text: str
 
+# ── UPLOAD PDF ENDPOINT ───────────────────────────────────
+@app.post("/upload")
+async def upload_pdf(file: UploadFile = File(...)):
+    global rag_collection
+    try:
+        contents = await file.read()
+        reader = PdfReader(io.BytesIO(contents))
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+
+        words = text.split()
+        chunks = []
+        for i in range(0, len(words), 200):
+            chunks.append(" ".join(words[i:i+200]))
+
+        try:
+            chroma_client.delete_collection("waguri_docs")
+        except:
+            pass
+
+        rag_collection = chroma_client.create_collection("waguri_docs")
+        embeddings = embedder.encode(chunks).tolist()
+        rag_collection.add(
+            documents=chunks,
+            embeddings=embeddings,
+            ids=[f"chunk_{i}" for i in range(len(chunks))]
+        )
+        return {"message": f"Loaded {len(chunks)} chunks from {file.filename}!", "chunks": len(chunks)}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/rag-status")
+async def rag_status():
+    return {"loaded": rag_collection is not None}
+
 # ── CHAT ENDPOINT ─────────────────────────────────────────
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    history = [{"role": "system", "content": WAGURI_SYSTEM}] + req.history
+    # If RAG document is loaded, add context
+    rag_context = ""
+    if rag_collection:
+        try:
+            q_emb = embedder.encode([req.message]).tolist()
+            results = rag_collection.query(query_embeddings=q_emb, n_results=3)
+            rag_context = "\n\n".join(results["documents"][0])
+        except:
+            pass
+
+    system = WAGURI_SYSTEM
+    if rag_context:
+        system += f"\n\nDocument context (answer from this if relevant):\n{rag_context}"
+
+    history = [{"role": "system", "content": system}] + req.history
     history.append({"role": "user", "content": req.message})
 
     response = groq_client.chat.completions.create(
@@ -114,32 +174,33 @@ async def chat(req: ChatRequest):
     tool_names = ["calculate", "save_note", "read_notes", "get_time", "search_web"]
     is_tool_call = "USE_TOOL" in decision or any(t in decision for t in tool_names)
 
-    if is_tool_call:
-     tool_name = None
-    for t in tool_names:
-        if t in decision:
-            tool_name = t
-            break
-
+    tool_name = None
     tool_input = ""
-    if "|" in decision:
-        tool_input = decision.split("|", 1)[1].strip()
-    elif "(" in decision and ")" in decision:
-        tool_input = decision.split("(", 1)[1].rsplit(")", 1)[0].strip()
-        tool_input = tool_input.replace('expression=', '').replace(
-            'text=', '').replace('query=', '').strip('"').strip("'")
 
-    if tool_name and tool_name in TOOLS:
-        tool_result = TOOLS[tool_name](tool_input) if tool_input else TOOLS[tool_name]()
-        history.append({"role": "assistant", "content": decision})
-        history.append({"role": "user", "content": f"Tool result: {tool_result}. Now respond naturally as Waguri-san without mentioning USE_TOOL."})
+    if is_tool_call:
+        for t in tool_names:
+            if t in decision:
+                tool_name = t
+                break
 
-        final = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=history
-        )
-        answer = final.choices[0].message.content.strip()
-        return {"reply": answer}
+        if "|" in decision:
+            tool_input = decision.split("|", 1)[1].strip()
+        elif "(" in decision and ")" in decision:
+            tool_input = decision.split("(", 1)[1].rsplit(")", 1)[0].strip()
+            tool_input = tool_input.replace('expression=', '').replace(
+                'text=', '').replace('query=', '').strip('"').strip("'")
+
+        if tool_name and tool_name in TOOLS:
+            tool_result = TOOLS[tool_name](tool_input) if tool_input else TOOLS[tool_name]()
+            history.append({"role": "assistant", "content": decision})
+            history.append({"role": "user", "content": f"Tool result: {tool_result}. Now respond naturally as Waguri-san without mentioning USE_TOOL."})
+
+            final = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=history
+            )
+            answer = final.choices[0].message.content.strip()
+            return {"reply": answer}
 
     return {"reply": decision}
 
