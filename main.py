@@ -1,6 +1,6 @@
 import os
 import re
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -12,15 +12,12 @@ from elevenlabs.client import ElevenLabs
 import base64
 from pypdf import PdfReader
 import chromadb
-from sentence_transformers import SentenceTransformer
 import io
-from fastapi import UploadFile, File
 
 load_dotenv(Path(__file__).parent / ".env")
 
 app = FastAPI()
 
-# Allow Next.js frontend to call this backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,7 +30,6 @@ tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 el_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
 # ── RAG SETUP ────────────────────────────────────────────
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
 chroma_client = chromadb.Client()
 rag_collection = None
 
@@ -131,10 +127,8 @@ async def upload_pdf(file: UploadFile = File(...)):
             pass
 
         rag_collection = chroma_client.create_collection("waguri_docs")
-        embeddings = embedder.encode(chunks).tolist()
         rag_collection.add(
             documents=chunks,
-            embeddings=embeddings,
             ids=[f"chunk_{i}" for i in range(len(chunks))]
         )
         return {"message": f"Loaded {len(chunks)} chunks from {file.filename}!", "chunks": len(chunks)}
@@ -148,12 +142,10 @@ async def rag_status():
 # ── CHAT ENDPOINT ─────────────────────────────────────────
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    # If RAG document is loaded, add context
     rag_context = ""
     if rag_collection:
         try:
-            q_emb = embedder.encode([req.message]).tolist()
-            results = rag_collection.query(query_embeddings=q_emb, n_results=3)
+            results = rag_collection.query(query_texts=[req.message], n_results=3)
             rag_context = "\n\n".join(results["documents"][0])
         except:
             pass
