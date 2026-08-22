@@ -158,7 +158,7 @@ async def chat(req: ChatRequest):
     history.append({"role": "user", "content": req.message})
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama3-70b-8192",
         messages=history
     )
     decision = response.choices[0].message.content.strip()
@@ -188,7 +188,7 @@ async def chat(req: ChatRequest):
             history.append({"role": "user", "content": f"Tool result: {tool_result}. Now respond naturally as Waguri-san without mentioning USE_TOOL."})
 
             final = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama3-70b-8192",
                 messages=history
             )
             answer = final.choices[0].message.content.strip()
