@@ -235,7 +235,7 @@ def chat_with_waguri(user_input: str) -> str:
     })
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         messages=st.session_state.history
     )
     decision = response.choices[0].message.content.strip()
@@ -270,7 +270,7 @@ def chat_with_waguri(user_input: str) -> str:
             st.session_state.history.append({"role": "user", "content": f"Tool result: {tool_result}"})
 
             final = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 messages=st.session_state.history
             )
             answer = final.choices[0].message.content.strip()
